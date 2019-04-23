@@ -14,6 +14,8 @@ import (
 	snap_client "github.com/kubernetes-incubator/external-storage/snapshot/pkg/client"
 	aut_v1alpaha1 "github.com/libopenstorage/autopilot/pkg/apis/autopilot/v1alpha1"
 	autopilotclientset "github.com/libopenstorage/autopilot/pkg/client/clientset/versioned"
+	corev1alpha1 "github.com/libopenstorage/operator/pkg/apis/core/v1alpha1"
+	ostclientset "github.com/libopenstorage/operator/pkg/client/clientset/versioned"
 	"github.com/libopenstorage/stork/pkg/apis/stork/v1alpha1"
 	storkclientset "github.com/libopenstorage/stork/pkg/client/clientset/versioned"
 	ocp_appsv1_api "github.com/openshift/api/apps/v1"
@@ -92,6 +94,7 @@ type Ops interface {
 	MigrationOps
 	ClusterDomainsOps
 	AutopilotRuleOps
+	StorageClusterOps
 	ObjectOps
 	SchedulePolicyOps
 	VolumePlacementStrategyOps
@@ -105,6 +108,7 @@ type Ops interface {
 		client kubernetes.Interface,
 		snapClient rest.Interface,
 		storkClient storkclientset.Interface,
+		ostClient ostclientset.Interface,
 		apiExtensionClient apiextensionsclient.Interface,
 		dynamicInterface dynamic.Interface,
 		ocpClient ocp_clientset.Interface,
@@ -664,6 +668,16 @@ type MigrationOps interface {
 		map[v1alpha1.SchedulePolicyType][]*v1alpha1.ScheduledMigrationStatus, error)
 }
 
+// StorageClusterOps is an interface to perfrom k8s StorageCluster operations
+type StorageClusterOps interface {
+	// GetStorageCluster gets the StorageCluster with given name and namespace
+	GetStorageCluster(string, string) (*corev1alpha1.StorageCluster, error)
+	// ListStorageClusters lists all the StorageClusters
+	ListStorageClusters(string) (*corev1alpha1.StorageClusterList, error)
+	// UpdateStorageClusterStatus update the status of given StorageCluster
+	UpdateStorageClusterStatus(*corev1alpha1.StorageCluster) (*corev1alpha1.StorageCluster, error)
+}
+
 // ObjectOps is an interface to perform generic Object operations
 type ObjectOps interface {
 	// GetObject returns the latest object given a generic Object
@@ -814,6 +828,7 @@ type k8sOps struct {
 	client             kubernetes.Interface
 	snapClient         rest.Interface
 	storkClient        storkclientset.Interface
+	ostClient          ostclientset.Interface
 	talismanClient     talismanclientset.Interface
 	autopilotClient    autopilotclientset.Interface
 	apiExtensionClient apiextensionsclient.Interface
@@ -853,6 +868,7 @@ func (k *k8sOps) SetClient(
 	client kubernetes.Interface,
 	snapClient rest.Interface,
 	storkClient storkclientset.Interface,
+	ostClient ostclientset.Interface,
 	apiExtensionClient apiextensionsclient.Interface,
 	dynamicInterface dynamic.Interface,
 	ocpClient ocp_clientset.Interface,
@@ -863,6 +879,7 @@ func (k *k8sOps) SetClient(
 	k.client = client
 	k.snapClient = snapClient
 	k.storkClient = storkClient
+	k.ostClient = ostClient
 	k.apiExtensionClient = apiExtensionClient
 	k.dynamicInterface = dynamicInterface
 	k.ocpClient = ocpClient
@@ -4240,6 +4257,33 @@ func (k *k8sOps) UpdateSchedulePolicy(schedulePolicy *v1alpha1.SchedulePolicy) (
 
 // SchedulePolicy APIs - END
 
+// StorageCluster APIs - BEGIN
+func (k *k8sOps) GetStorageCluster(name, namespace string) (*corev1alpha1.StorageCluster, error) {
+	if err := k.initK8sClient(); err != nil {
+		return nil, err
+	}
+
+	return k.ostClient.CoreV1alpha1().StorageClusters(namespace).Get(name, meta_v1.GetOptions{})
+}
+
+func (k *k8sOps) ListStorageClusters(namespace string) (*corev1alpha1.StorageClusterList, error) {
+	if err := k.initK8sClient(); err != nil {
+		return nil, err
+	}
+
+	return k.ostClient.CoreV1alpha1().StorageClusters(namespace).List(meta_v1.ListOptions{})
+}
+
+func (k *k8sOps) UpdateStorageClusterStatus(cluster *corev1alpha1.StorageCluster) (*corev1alpha1.StorageCluster, error) {
+	if err := k.initK8sClient(); err != nil {
+		return nil, err
+	}
+
+	return k.ostClient.CoreV1alpha1().StorageClusters(cluster.Namespace).UpdateStatus(cluster)
+}
+
+// StorageCluster APIs - END
+
 // Event APIs - BEGIN
 // CreateEvent puts an event into k8s etcd
 func (k *k8sOps) CreateEvent(event *v1.Event) (*v1.Event, error) {
@@ -5140,6 +5184,11 @@ func (k *k8sOps) loadClientFor(config *rest.Config) error {
 	}
 
 	k.storkClient, err = storkclientset.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	k.ostClient, err = ostclientset.NewForConfig(config)
 	if err != nil {
 		return err
 	}
